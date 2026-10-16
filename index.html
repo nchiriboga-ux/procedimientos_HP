@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Biblioteca HSE QR</title>
+<meta name="description" content="Biblioteca documental offline con códigos QR">
+<meta name="theme-color" content="#16181a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HSE QR">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <button class="icon-btn" id="backBtn" aria-label="Volver" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <h1 id="viewTitle">Biblioteca HSE</h1>
+    <span class="net" id="netBadge" title="Estado de conexión"></span>
+  </header>
+  <main id="main" tabindex="-1"></main>
+  <nav class="tabbar" aria-label="Navegación principal">
+    <a href="#/inicio" data-tab="inicio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/></svg><span>Inicio</span></a>
+    <a href="#/biblioteca" data-tab="biblioteca"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4v16H5zM10 4h4v16h-4zM15.5 5l3.8-1 3 15.5-3.8 1z"/></svg><span>Biblioteca</span></a>
+    <a href="#/escanear" data-tab="escanear" class="scan-tab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5M7 12h10"/></svg><span>Escanear</span></a>
+    <a href="#/paquetes" data-tab="paquetes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10"/></svg><span>Paquetes</span></a>
+    <a href="#/ajustes" data-tab="ajustes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg><span>Ajustes</span></a>
+  </nav>
+</div>
+
+<section id="viewer" class="overlay" hidden aria-label="Visor de documento">
+  <div class="viewer-bar">
+    <button class="icon-btn light" id="viewerClose" aria-label="Cerrar visor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div class="viewer-title"><strong id="viewerTitle"></strong><span id="viewerMeta"></span></div>
+    <button class="icon-btn light" id="zoomOut" aria-label="Alejar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+    <button class="icon-btn light" id="zoomIn" aria-label="Acercar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+  </div>
+  <div id="viewerNotice" class="viewer-notice" hidden></div>
+  <div id="pages" class="pages"></div>
+  <div class="page-indicator" id="pageInd"></div>
+</section>
+
+<section id="scanner" class="overlay scanner" hidden aria-label="Escáner QR">
+  <video id="scanVideo" playsinline muted autoplay></video>
+  <div class="scan-frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div class="scan-top">
+    <button class="icon-btn light" id="scanClose" aria-label="Cerrar escáner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <span>Apunta al código QR del documento</span>
+    <button class="icon-btn light" id="torchBtn" aria-label="Linterna" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2h6v5l-2 3v12h-2V10L9 7z"/></svg></button>
+  </div>
+  <div class="scan-bottom" id="scanMsg">Iniciando cámara…</div>
+</section>
+
+<div id="modalRoot"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="vendor/qrcode.js"></script>
+<script src="vendor/jsQR.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
