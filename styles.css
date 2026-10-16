@@ -24,7 +24,8 @@ svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-l
 .topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
   padding:calc(env(safe-area-inset-top,0px) + 8px) max(14px,env(safe-area-inset-right,0px)) 8px max(14px,env(safe-area-inset-left,0px));
   background:var(--ink);color:var(--bg);border-bottom:4px solid var(--signal)}
-.topbar h1{flex:1;margin:0;font-size:18px;font-weight:700;letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar h1{flex:1;min-width:0;margin:0;font-size:17px;line-height:1.2;font-weight:700;letter-spacing:.01em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;text-wrap:balance}
+.brand-logo{flex:none;height:32px;width:auto;padding:3px 5px;border-radius:6px;background:#fff;box-sizing:content-box}
 .net{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:3px 8px;border-radius:99px;background:rgba(255,255,255,.12)}
 .net.off{background:var(--signal);color:var(--signal-ink)}
 main{flex:1;width:100%;max-width:880px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-left,0px)) calc(var(--tabbar-h) + env(safe-area-inset-bottom,0px) + 24px) max(16px,env(safe-area-inset-right,0px));outline:none}

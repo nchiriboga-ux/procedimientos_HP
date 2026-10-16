@@ -1,9 +1,9 @@
-/* Biblioteca HSE QR — app web offline
+/* Procedimientos HP Drilling Services S.A.S — app web offline
    Almacena PDFs en IndexedDB del dispositivo. Cada QR contiene solo "DOC:<ID>";
    la app resuelve ese ID al PDF local. No usa servidores. */
 'use strict';
 
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.4';
 const QR_PREFIX = 'DOC:';
 const PKG_FORMAT = 'docqr-package';
 const DEFAULT_CATS = ['Seguridad Industrial', 'Salud Ocupacional', 'Gestión Ambiental', 'Procedimientos operativos', 'Planes de emergencia', 'Instructivos', 'Otros'];
@@ -244,7 +244,7 @@ async function qrSheetPdf(docs) {
     pdf.text([d.id, d.version].filter(Boolean).join('  ·  '), x + cw / 2, ty + 1, { align: 'center' }); ty += 5;
     pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(80);
     pdf.text(d.category || '', x + cw / 2, ty + 1, { align: 'center' }); ty += 5;
-    pdf.setFontSize(7.5); pdf.text('Escanear con la app Biblioteca HSE QR - funciona sin internet', x + cw / 2, y + ch - 4, { align: 'center' });
+    pdf.setFontSize(7.5); pdf.text('Escanear con la app Procedimientos HP - funciona sin internet', x + cw / 2, y + ch - 4, { align: 'center' });
   });
   return pdf.output('blob');
 }
@@ -272,7 +272,7 @@ const ICON = {
   cfg: '<svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>'
 };
-function setTitle(t, back = false) { $('#viewTitle').textContent = t; $('#backBtn').hidden = !back; document.title = t + ' · Biblioteca HSE QR'; }
+function setTitle(t, back = false) { $('#viewTitle').textContent = t; $('#backBtn').hidden = !back; document.title = t === 'Procedimientos HP' ? t : t + ' · Procedimientos HP'; }
 function setTab(tab) { $$('.tabbar a').forEach(a => a.classList.toggle('active', a.dataset.tab === tab)); }
 const main = () => $('#main');
 
@@ -281,7 +281,7 @@ let deferredInstall = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; if (location.hash === '#/inicio' || !location.hash) route(); });
 
 function viewHome() {
-  setTitle('Biblioteca HSE'); setTab('inicio');
+  setTitle('Procedimientos HP'); setTab('inicio');
   const c = { ok: 0, pending: 0, outdated: 0 }; S.docs.forEach(d => c[statusOf(d)]++);
   const favs = S.docs.filter(d => d.favorite).slice(0, 6);
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -603,7 +603,7 @@ async function exportPackage() {
   if (!docs.length) { toast('No hay documentos para exportar'); return; }
   toast('Preparando paquete…', 8000);
   const zip = new JSZip();
-  const manifest = { format: PKG_FORMAT, formatVersion: 1, app: 'Biblioteca HSE QR ' + APP_VERSION, createdAt: new Date().toISOString(), includesPdfs: withPdf, categories: S.cats, docs: [] };
+  const manifest = { format: PKG_FORMAT, formatVersion: 1, app: 'Procedimientos HP ' + APP_VERSION, createdAt: new Date().toISOString(), includesPdfs: withPdf, categories: S.cats, docs: [] };
   for (const d of docs) {
     const e = { id: d.id, code: d.code || d.id, name: d.name, category: d.category, area: d.area, version: d.version, updated: d.updated, keywords: d.keywords || '', qrPayload: payloadFor(d.id), qr: `qr/${d.id}.png` };
     if (withPdf && d.hasFile) {
@@ -614,7 +614,7 @@ async function exportPackage() {
     manifest.docs.push(e);
   }
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
-  zip.file('LEEME.txt', 'Paquete documental de Biblioteca HSE QR.\nPara usarlo: abre la app > Paquetes > Importar paquete y elige este archivo .zip.\nNo descomprimas el archivo.\n');
+  zip.file('LEEME.txt', 'Paquete documental de la app Procedimientos HP Drilling Services S.A.S.\nPara usarlo: abre la app > Paquetes > Importar paquete y elige este archivo .zip.\nNo descomprimas el archivo.\n');
   const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip' });
   const name = `Paquete_HSE_${today()}${cat ? '_' + normId(cat) : ''}.zip`;
   await deliverFile(blob, name, 'Paquete listo');
@@ -626,7 +626,7 @@ async function importPackage(file) {
     const mf = zip.file('manifest.json');
     if (!mf) throw new Error('El archivo no contiene manifest.json');
     manifest = JSON.parse(await mf.async('string'));
-    if (manifest.format !== PKG_FORMAT) throw new Error('No es un paquete de Biblioteca HSE QR');
+    if (manifest.format !== PKG_FORMAT) throw new Error('No es un paquete de esta app');
   } catch (e) {
     await modal({ title: 'No se pudo leer el paquete', html: `<p>${esc(e.message)}</p><p class="muted small">Elige el archivo .zip tal como lo exportó la app, sin descomprimirlo.</p>` }); return;
   }
