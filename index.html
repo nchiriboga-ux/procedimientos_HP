@@ -66,5 +66,20 @@
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="vendor/pdf.min.js"></script>
 <script src="app.js"></script>
+<script>
+  /* Si app.js no arranca, mostrar el motivo en lugar de una pantalla vacía */
+  (function () {
+    var shown = false;
+    function show(msg) {
+      if (shown) return; shown = true;
+      var m = document.getElementById('main');
+      m.innerHTML = '<div class="notice bad"><b>La app no pudo iniciar.</b><br>' + msg + '</div>';
+    }
+    window.addEventListener('error', function (e) { if (!window.__appReady) show('Error: ' + (e.message || 'al cargar ' + ((e.target && (e.target.src || e.target.href)) || 'un archivo'))); }, true);
+    setTimeout(function () {
+      if (!window.__appStarted) show('No se cargó <b>app.js</b>. Verifica que index.html, app.js, styles.css y sw.js estén en la misma carpeta del repositorio.');
+    }, 5000);
+  })();
+</script>
 </body>
 </html>

@@ -3,7 +3,7 @@
    la app resuelve ese ID al PDF local. No usa servidores. */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const QR_PREFIX = 'DOC:';
 const PKG_FORMAT = 'docqr-package';
 const DEFAULT_CATS = ['Seguridad Industrial', 'Salud Ocupacional', 'Gestión Ambiental', 'Procedimientos operativos', 'Planes de emergencia', 'Instructivos', 'Otros'];
@@ -745,13 +745,14 @@ async function setPin() {
 
 /* ---------- visor PDF ---------- */
 const V = { pdf: null, scale: 1, observer: null, rendered: new Map(), id: null };
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 async function openViewer(id) {
   const d = findDoc(id);
   if (!d) { location.hash = '#/doc/' + encodeURIComponent(id); return; }
   if (!d.hasFile) { location.hash = '#/doc/' + encodeURIComponent(id); return; }
   const buf = await getFile(id);
   if (!buf) { toast('No se encontró el PDF en el dispositivo'); return; }
+  if (!window.pdfjsLib) { toast('Falta el archivo vendor/pdf.min.js: no se puede mostrar el PDF'); return; }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
   closeViewer(true);
   V.id = id;
   $('#viewer').hidden = false; document.body.style.overflow = 'hidden';
@@ -973,8 +974,15 @@ function updateNet() { const b = $('#netBadge'); const on = navigator.onLine; b.
 window.addEventListener('online', updateNet); window.addEventListener('offline', updateNet);
 
 /* ---------- arranque ---------- */
+const LIBS = [['qrcode', 'vendor/qrcode.js'], ['jsQR', 'vendor/jsQR.js'], ['JSZip', 'vendor/jszip.min.js'], ['jspdf', 'vendor/jspdf.umd.min.js'], ['pdfjsLib', 'vendor/pdf.min.js']];
 async function boot() {
+  window.__appStarted = true;
   updateNet();
+  const missing = LIBS.filter(([g]) => !window[g]).map(([, f]) => f);
+  if (missing.length) {
+    main().innerHTML = `<div class="notice bad"><b>Faltan archivos de la app en el servidor.</b><br>No se cargaron: <span class="mono small">${missing.map(esc).join(', ')}</span>.<br>Sube la carpeta <b>vendor</b> completa al repositorio (junto a index.html) y vuelve a abrir la app.</div>`;
+    return;
+  }
   if (!window.isSecureContext || !crypto.subtle) {
     main().innerHTML = '<div class="notice bad">La app debe abrirse desde una dirección https para funcionar.</div>'; return;
   }
@@ -989,6 +997,7 @@ async function boot() {
     S.admin = true;
   }
   route();
+  window.__appReady = true;
   if ('serviceWorker' in navigator) {
     try {
       await navigator.serviceWorker.register('sw.js');
