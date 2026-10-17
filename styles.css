@@ -175,3 +175,8 @@ label.f textarea{height:auto;min-height:64px;padding:10px 12px;resize:vertical}
 .scan-bottom .btn{border-color:#fff;color:#fff;margin:8px 4px 0}
 
 @media (prefers-reduced-motion:reduce){#toast{transition:none}}
+
+/* Protección de documentos */
+#viewer, #viewer *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#pages canvas{pointer-events:none}
+@media print{ body *{display:none!important} body::after{content:'Impresión deshabilitada: documento controlado de HP Drilling Services.';display:block;padding:40px;font:16px sans-serif} }

@@ -3,9 +3,11 @@
    la app resuelve ese ID al PDF local. No usa servidores. */
 'use strict';
 
-const APP_VERSION = '1.0.4';
+const APP_VERSION = '1.1.0';
 const QR_PREFIX = 'DOC:';
 const PKG_FORMAT = 'docqr-package';
+const SECURE_FORMAT = 'hp-secure-package';
+const KDF_ITER = 200000;
 const DEFAULT_CATS = ['Seguridad Industrial', 'Salud Ocupacional', 'Gestión Ambiental', 'Procedimientos operativos', 'Planes de emergencia', 'Instructivos', 'Otros'];
 
 /* ---------- utilidades ---------- */
@@ -36,6 +38,23 @@ function cmpVer(a, b) {
   const x = verNums(a), y = verNums(b);
   for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return Math.sign(d); }
   return 0;
+}
+const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode(...u8.subarray(i, i + 8192)); return btoa(s); };
+const unb64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+const hex = u8 => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
+const unhex = h => Uint8Array.from(h.match(/../g).map(x => parseInt(x, 16)));
+async function deriveKey(password, saltHex, iterations = KDF_ITER) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: unhex(saltHex), iterations }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encBytes(key, data) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data));
+  const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12); return out;
+}
+async function decBytes(key, data) {
+  const u = new Uint8Array(data);
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.subarray(0, 12) }, key, u.subarray(12));
 }
 async function sha256(buf) {
   const h = await crypto.subtle.digest('SHA-256', buf);
@@ -113,7 +132,7 @@ async function setSetting(key, value) { await DB.put('settings', { key, value })
 async function getFile(id) { const f = await DB.get('files', id); return f ? f.data : null; }
 
 /* ---------- estado ---------- */
-const S = { docs: [], cats: DEFAULT_CATS.slice(), filter: { q: '', cat: '', status: '', fav: false }, admin: false, pin: null, restrictAdmin: true, lockApp: false, importQueue: [] };
+const S = { user: '', docs: [], cats: DEFAULT_CATS.slice(), filter: { q: '', cat: '', status: '', fav: false }, admin: false, pin: null, restrictAdmin: true, lockApp: false, importQueue: [] };
 async function refresh() {
   S.docs = (await DB.all('docs')).sort((a, b) => a.id.localeCompare(b.id, 'es', { numeric: true }));
   S.cats = await setting('categories', DEFAULT_CATS.slice());
@@ -378,7 +397,6 @@ async function viewDoc(id) {
       <div class="actions">
         <button class="btn primary wide" data-act="open" data-id="${esc(d.id)}" ${d.hasFile ? '' : 'disabled'}>Abrir documento</button>
         <a class="btn" href="#/qr/${encodeURIComponent(d.id)}">Ver QR</a>
-        <button class="btn" data-act="share-pdf" data-id="${esc(d.id)}" ${d.hasFile ? '' : 'disabled'}>Compartir PDF</button>
         <button class="btn" data-act="edit" data-id="${esc(d.id)}">Editar datos</button>
         <button class="btn" data-act="replace" data-id="${esc(d.id)}">Nueva versión PDF</button>
         <button class="btn danger wide" data-act="delete" data-id="${esc(d.id)}">Eliminar</button>
@@ -583,7 +601,7 @@ function viewPackages(params) {
   main().innerHTML = `
     <div class="card" id="pkgExport" ${focus === 'import' ? 'style="order:2"' : ''}>
       <h2 style="margin-top:0">Crear paquete</h2>
-      <p class="small muted">Genera un archivo .zip con los PDF, el catálogo, los identificadores QR, las imágenes QR y los hashes SHA-256. Pásalo por cable USB, AirDrop, Bluetooth o una memoria.</p>
+      <p class="small muted">Genera un paquete <b>cifrado</b> con los PDF, el catálogo y los hashes SHA-256. Fuera de la app no se puede abrir: los archivos internos son ilegibles. Se protege con una clave que pedirá al importarlo.</p>
       <label class="f" style="margin-bottom:8px">Documentos<select id="pkgCat"><option value="">Todos (${S.docs.length})</option>${S.cats.map(c => `<option>${esc(c)}</option>`).join('')}</select></label>
       <label class="check"><input type="checkbox" id="pkgPdfs" checked> Incluir los archivos PDF</label>
       <p class="small muted">Sin PDFs, el paquete solo actualiza el catálogo: los documentos aparecen como pendientes o desactualizados en el otro dispositivo.</p>
@@ -596,39 +614,88 @@ function viewPackages(params) {
     </div>`;
   $('#pkgIn').addEventListener('change', e => { const f = e.target.files[0]; if (f) importPackage(f); });
 }
+async function askNewPackageKey() {
+  return modal({
+    title: 'Clave del paquete',
+    html: `<p class="small muted">Quien importe el paquete deberá escribir esta clave. Compártela solo con los Prevencionistas, nunca junto con el archivo.</p>
+      <label class="f">Clave (mínimo 6 caracteres)<input id="k1" type="password" autocomplete="new-password"></label>
+      <label class="f" style="margin-top:8px">Repetir clave<input id="k2" type="password" autocomplete="new-password"></label>
+      <p class="small" id="ke" style="color:var(--bad);margin-top:6px"></p>`,
+    actions: [{ label: 'Crear paquete cifrado', kind: 'primary', handler: m => { const a = $('#k1', m).value, b = $('#k2', m).value; if (a.length < 6) { $('#ke', m).textContent = 'Usa al menos 6 caracteres.'; return false; } if (a !== b) { $('#ke', m).textContent = 'Las claves no coinciden.'; return false; } return a; } }, { label: 'Cancelar', value: null }]
+  });
+}
 async function exportPackage() {
   if (!(await requireAdmin())) return;
   const cat = $('#pkgCat').value, withPdf = $('#pkgPdfs').checked;
   const docs = S.docs.filter(d => !cat || d.category === cat);
   if (!docs.length) { toast('No hay documentos para exportar'); return; }
-  toast('Preparando paquete…', 8000);
+  const password = await askNewPackageKey(); if (!password) return;
+  toast('Cifrando paquete…', 15000);
+  const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const key = await deriveKey(password, salt);
   const zip = new JSZip();
-  const manifest = { format: PKG_FORMAT, formatVersion: 1, app: 'Procedimientos HP ' + APP_VERSION, createdAt: new Date().toISOString(), includesPdfs: withPdf, categories: S.cats, docs: [] };
+  const catalog = { format: PKG_FORMAT, formatVersion: 1, app: 'Procedimientos HP ' + APP_VERSION, createdAt: new Date().toISOString(), includesPdfs: withPdf, categories: S.cats, docs: [] };
+  let n = 0;
   for (const d of docs) {
-    const e = { id: d.id, code: d.code || d.id, name: d.name, category: d.category, area: d.area, version: d.version, updated: d.updated, keywords: d.keywords || '', qrPayload: payloadFor(d.id), qr: `qr/${d.id}.png` };
+    const e = { id: d.id, code: d.code || d.id, name: d.name, category: d.category, area: d.area, version: d.version, updated: d.updated, keywords: d.keywords || '', qrPayload: payloadFor(d.id) };
     if (withPdf && d.hasFile) {
       const buf = await getFile(d.id);
-      if (buf) { zip.file(`pdf/${d.id}.pdf`, buf, { compression: 'STORE' }); Object.assign(e, { file: `pdf/${d.id}.pdf`, sha256: d.sha256, size: d.size, fileVersion: d.fileVersion }); }
+      if (buf) { n++; const f = `datos/${String(n).padStart(3, '0')}.bin`; zip.file(f, await encBytes(key, buf), { compression: 'STORE' }); Object.assign(e, { file: f, sha256: d.sha256, size: d.size, fileVersion: d.fileVersion }); }
     }
-    zip.file(e.qr, await canvasBlob(labelCanvas(d)));
-    manifest.docs.push(e);
+    catalog.docs.push(e);
   }
-  zip.file('manifest.json', JSON.stringify(manifest, null, 2));
-  zip.file('LEEME.txt', 'Paquete documental de la app Procedimientos HP Drilling Services S.A.S.\nPara usarlo: abre la app > Paquetes > Importar paquete y elige este archivo .zip.\nNo descomprimas el archivo.\n');
+  zip.file('catalogo.bin', await encBytes(key, new TextEncoder().encode(JSON.stringify(catalog))));
+  zip.file('paquete.json', JSON.stringify({ format: SECURE_FORMAT, version: 1, createdAt: catalog.createdAt, documents: catalog.docs.length, kdf: { name: 'PBKDF2-SHA256', salt, iterations: KDF_ITER }, cipher: 'AES-256-GCM' }, null, 2));
+  zip.file('LEEME.txt', 'Paquete CIFRADO de la app Procedimientos HP - HP Drilling Services S.A.S.\nSolo se abre dentro de la app: Paquetes > Importar paquete. Pide la clave a HSE.\nNo descomprimas el archivo. Uso exclusivo del personal de HP.\n');
   const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/zip' });
-  const name = `Paquete_HSE_${today()}${cat ? '_' + normId(cat) : ''}.zip`;
-  await deliverFile(blob, name, 'Paquete listo');
+  const name = `Paquete_HP_${today()}${cat ? '_' + normId(cat) : ''}.zip`;
+  await deliverFile(blob, name, 'Paquete cifrado listo');
+}
+async function askPackageKey(saltHex, iterations, check) {
+  let key = null;
+  const ok = await modal({
+    title: 'Clave del paquete',
+    html: `<p class="small muted">Este paquete está protegido. Escribe la clave que te entregó HSE o tu Prevencionista.</p>
+      <label class="f">Clave<input id="pk" type="password" autocomplete="off"></label><p class="small" id="pe" style="color:var(--bad);margin-top:6px"></p>`,
+    actions: [{ label: 'Abrir paquete', kind: 'primary', handler: async m => {
+      const v = $('#pk', m).value; if (!v) return false;
+      $('#pe', m).textContent = 'Verificando…';
+      try { const k = await deriveKey(v, saltHex, iterations); await check(k); key = k; return true; }
+      catch (e) { $('#pe', m).textContent = 'Clave incorrecta. Inténtalo de nuevo.'; $('#pk', m).value = ''; return false; }
+    } }, { label: 'Cancelar', value: null }],
+    onOpen: m => $('#pk', m).addEventListener('keydown', e => { if (e.key === 'Enter') $('[data-i="0"]', m).click(); })
+  });
+  return ok ? key : null;
 }
 async function importPackage(file) {
-  let zip, manifest;
+  let zip, manifest, readPdf;
   try {
     zip = await JSZip.loadAsync(file);
-    const mf = zip.file('manifest.json');
-    if (!mf) throw new Error('El archivo no contiene manifest.json');
-    manifest = JSON.parse(await mf.async('string'));
-    if (manifest.format !== PKG_FORMAT) throw new Error('No es un paquete de esta app');
   } catch (e) {
-    await modal({ title: 'No se pudo leer el paquete', html: `<p>${esc(e.message)}</p><p class="muted small">Elige el archivo .zip tal como lo exportó la app, sin descomprimirlo.</p>` }); return;
+    await modal({ title: 'No se pudo leer el paquete', html: `<p>El archivo no es un paquete válido.</p><p class="muted small">Elige el archivo .zip tal como lo recibiste, sin descomprimirlo.</p>` }); return;
+  }
+  try {
+    const head = zip.file('paquete.json');
+    if (head) {
+      const info = JSON.parse(await head.async('string'));
+      if (info.format !== SECURE_FORMAT) throw new Error('No es un paquete de esta app');
+      const catBin = await zip.file('catalogo.bin').async('uint8array');
+      let catalog = null;
+      const key = await askPackageKey(info.kdf.salt, info.kdf.iterations, async k => { catalog = JSON.parse(new TextDecoder().decode(await decBytes(k, catBin))); });
+      if (!key) return;
+      manifest = catalog;
+      readPdf = async e => { const ent = zip.file(e.file); if (!ent) return null; try { return await decBytes(key, await ent.async('uint8array')); } catch (x) { return new ArrayBuffer(0); } };
+    } else {
+      const mf = zip.file('manifest.json');
+      if (!mf) throw new Error('El archivo no es un paquete de esta app');
+      manifest = JSON.parse(await mf.async('string'));
+      if (manifest.format !== PKG_FORMAT) throw new Error('No es un paquete de esta app');
+      // paquete sin cifrar (formato anterior): solo un administrador puede importarlo
+      if (!S.pin || !(await requireAdmin())) { await modal({ title: 'Paquete no permitido', html: '<p>Este paquete no está cifrado. Solo un administrador con PIN puede importarlo.</p><p class="small muted">Pide a HSE el paquete cifrado vigente.</p>' }); return; }
+      readPdf = async e => { const ent = zip.file(e.file); return ent ? ent.async('arraybuffer') : null; };
+    }
+  } catch (e) {
+    await modal({ title: 'No se pudo leer el paquete', html: `<p>${esc(e.message)}</p><p class="muted small">Elige el archivo .zip tal como lo recibiste, sin descomprimirlo.</p>` }); return;
   }
   toast(`Verificando ${manifest.docs.length} documentos…`, 10000);
   if (Array.isArray(manifest.categories)) {
@@ -639,10 +706,9 @@ async function importPackage(file) {
     const id = normId(e.id); if (!id) continue;
     const local = await DB.get('docs', id);
     const meta = { code: id, name: e.name, category: e.category, area: e.area, version: e.version, updated: e.updated, keywords: e.keywords };
-    const entry = e.file ? zip.file(e.file) : null;
     if (e.file) {
-      if (!entry) { rep.bad.push(`${id}: falta el PDF dentro del paquete`); await markPending(local, id, meta, true); continue; }
-      const buf = await entry.async('arraybuffer');
+      const buf = await readPdf(e);
+      if (!buf) { rep.bad.push(`${id}: falta el PDF dentro del paquete`); await markPending(local, id, meta, true); continue; }
       const sha = await sha256(buf);
       if (sha !== e.sha256 || !isPdf(buf)) { rep.bad.push(`${id}: el PDF no coincide con su hash SHA-256 (dañado o alterado)`); await markPending(local, id, meta, true); continue; }
       if (local && local.hasFile && local.sha256 === sha) {
@@ -662,6 +728,7 @@ async function importPackage(file) {
   }
   await requestPersist();
   await refresh();
+  $('#toast').classList.remove('show');
   const sec = (t, a, cls = '') => a.length ? `<p style="margin:10px 0 4px"><b>${t} (${a.length})</b></p><div class="report ${cls}">${a.map(x => `<div>${esc(x)}</div>`).join('')}</div>` : '';
   await modal({
     title: 'Paquete importado',
@@ -717,8 +784,10 @@ async function viewSettings() {
       ${S.pin ? `<label class="switch"><span>Pedir PIN para importar, editar, eliminar y exportar</span><input type="checkbox" data-act="toggle-restrict" ${S.restrictAdmin ? 'checked' : ''}></label>
       <label class="switch"><span>Pedir PIN también al abrir la app</span><input type="checkbox" data-act="toggle-lock" ${S.lockApp ? 'checked' : ''}></label>
       <div class="switch"><span>Quitar el PIN</span><button class="btn danger" data-act="pin-del">Quitar</button></div>` : ''}
-      <p class="small muted" style="margin-top:8px">El PIN limita el acceso dentro de la app. Los archivos se guardan en el almacenamiento interno de la app sin cifrado adicional: para información confidencial usa además el bloqueo y cifrado del propio teléfono.</p>
+      <p class="small muted" style="margin-top:8px">El PIN limita el acceso dentro de la app. Los documentos solo se ven dentro de la app, con marca de agua del usuario. No se pueden descargar ni compartir desde la app, y los paquetes van cifrados. Las capturas de pantalla no se pueden bloquear: la marca de agua identifica su origen.</p>
     </div>
+    <h2>Usuario de este celular</h2>
+    <div class="card"><div class="switch"><span><b>${esc(S.user || 'Sin registrar')}</b><br><span class="small muted">Aparece como marca de agua en cada página</span></span><button class="btn" data-act="user-edit">Cambiar</button></div></div>
     <h2>Almacenamiento</h2>
     <div class="card"><dl class="kv">
       <dt>Documentos</dt><dd>${S.docs.length} (${S.docs.filter(d => d.hasFile).length} con PDF)</dd>
@@ -731,6 +800,18 @@ async function viewSettings() {
     <h2>Más</h2>
     <div class="tiles"><a class="tile" href="#/categorias">${ICON.cats}Administrar categorías</a><a class="tile" href="#/qr">${ICON.qr}Generar códigos QR</a></div>
     <p class="small muted" style="margin-top:16px">Incluye PDF.js (Apache 2.0), jsQR (Apache 2.0), qrcode-generator (MIT), JSZip (MIT) y jsPDF (MIT).</p>`;
+}
+async function askUser(first) {
+  const r = await modal({
+    title: first ? 'Registra este celular' : 'Usuario de este celular',
+    html: `<p class="small muted">Tu nombre aparecerá como marca de agua en los documentos. Los procedimientos son de uso exclusivo del personal de HP.</p>
+      <label class="f">Nombre y apellido<input id="u_n" value="${esc(S.user.split(' · ')[0] || '')}" autocomplete="name"></label>
+      <label class="f" style="margin-top:8px">Cédula<input id="u_c" inputmode="numeric" value="${esc(S.user.split(' · ')[1] || '')}"></label>
+      <p class="small" id="u_e" style="color:var(--bad);margin-top:6px"></p>`,
+    actions: [{ label: 'Guardar', kind: 'primary', handler: m => { const n = $('#u_n', m).value.trim().replace(/\s+/g, ' '), ci = $('#u_c', m).value.trim(); if (n.split(' ').length < 2) { $('#u_e', m).textContent = 'Escribe nombre y apellido.'; return false; } if (!/^\d{10}$/.test(ci)) { $('#u_e', m).textContent = 'La cédula debe tener 10 dígitos.'; return false; } return n + ' · ' + ci; } }].concat(first ? [] : [{ label: 'Cancelar', value: null }])
+  });
+  if (!r) { if (first) return askUser(true); return; }
+  S.user = r; await setSetting('deviceUser', r);
 }
 async function setPin() {
   if (S.pin && !(await requireAdmin())) return;
@@ -800,6 +881,7 @@ async function renderPage(n) {
   const vp = page.getViewport({ scale });
   const cv = document.createElement('canvas'); cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height);
   await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+  watermark(cv, n);
   if (el.dataset.r !== key) return;
   el.querySelector('canvas')?.remove(); el.prepend(cv); V.rendered.set(n, cv);
   // liberar páginas lejanas para no agotar la memoria con documentos grandes
@@ -807,6 +889,24 @@ async function renderPage(n) {
     const cur = currentPage();
     for (const [k, c] of V.rendered) if (Math.abs(k - cur) > 5) { c.width = c.height = 0; c.remove(); V.rendered.delete(k); const p = $(`#pages .page[data-n="${k}"]`); if (p) p.dataset.r = ''; }
   }
+}
+function watermark(cv, n) {
+  const c = cv.getContext('2d'), W = cv.width, H = cv.height, d = new Date();
+  const when = d.toLocaleDateString('es-EC') + ' ' + d.toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' });
+  const line = `HP DRILLING SERVICES · USO INTERNO · ${(S.user || 'Sin usuario').toUpperCase()} · ${when}`;
+  const fs = Math.max(12, Math.round(W / 38));
+  c.save();
+  c.font = `600 ${fs}px system-ui, Arial, sans-serif`; c.fillStyle = 'rgba(200, 20, 30, 0.13)'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.translate(W / 2, H / 2); c.rotate(-Math.atan2(H, W));
+  const diag = Math.hypot(W, H), step = fs * 7;
+  for (let y = -diag / 2; y < diag / 2; y += step) c.fillText(line, 0, y);
+  c.restore();
+  c.save();
+  const bar = Math.round(fs * 1.6);
+  c.fillStyle = 'rgba(22, 24, 26, 0.78)'; c.fillRect(0, H - bar, W, bar);
+  c.font = `600 ${Math.round(fs * 0.7)}px system-ui, Arial, sans-serif`; c.fillStyle = '#fff'; c.textBaseline = 'middle';
+  c.fillText(`Documento controlado · No compartir · ${S.user || 'Sin usuario'} · ${when} · pág. ${n}`, Math.round(fs * 0.6), H - bar / 2);
+  c.restore();
 }
 function currentPage() {
   const pages = $('#pages'); const mid = pages.scrollTop + pages.clientHeight / 2; let best = 1;
@@ -937,7 +1037,6 @@ document.addEventListener('click', async e => {
     case 'edit': editDoc(id); break;
     case 'replace': replacePdf(id); break;
     case 'delete': deleteDoc(id); break;
-    case 'share-pdf': { const d = findDoc(id); const buf = await getFile(id); if (buf) deliverFile(new Blob([buf], { type: 'application/pdf' }), `${d.id}.pdf`, d.name); break; }
     case 'save-queue': el.disabled = true; await saveQueue(); break;
     case 'qr-png': { const d = findDoc(id); deliverFile(await canvasBlob(labelCanvas(d)), `QR_${d.id}.png`, 'Imagen QR lista'); break; }
     case 'qr-sheet-one': { if (!(await requireAdmin())) return; deliverFile(await qrSheetPdf([findDoc(id)]), `QR_${id}.pdf`, 'Hoja de etiquetas lista'); break; }
@@ -951,6 +1050,7 @@ document.addEventListener('click', async e => {
     case 'export': exportPackage(); break;
     case 'cat-add': case 'cat-ren': case 'cat-del': catAction(act, +el.dataset.i); break;
     case 'pin-set': setPin(); break;
+    case 'user-edit': if (await requireAdmin()) { await askUser(false); route(); } break;
     case 'pin-del': if (await requireAdmin() && await confirmModal('Quitar PIN', 'Cualquier persona con el dispositivo podrá importar, editar y eliminar documentos.', 'Quitar PIN')) { S.pin = null; S.lockApp = false; await DB.del('settings', 'pin'); await setSetting('lockApp', false); toast('PIN eliminado'); route(); } break;
     case 'persist': await requestPersist(); route(); break;
     case 'scan-photo': scanPhoto(); break;
@@ -965,6 +1065,8 @@ document.addEventListener('change', async e => {
 $('#backBtn').addEventListener('click', () => { if (history.length > 1) history.back(); else location.hash = '#/inicio'; });
 $('#viewerClose').addEventListener('click', () => { closeViewer(true); if (location.hash.startsWith('#/ver/')) history.back(); });
 $('#zoomIn').addEventListener('click', () => zoom(1.25));
+['contextmenu', 'dragstart', 'selectstart', 'copy'].forEach(ev => $('#viewer').addEventListener(ev, e => e.preventDefault()));
+window.addEventListener('beforeprint', () => { if (!$('#viewer').hidden) closeViewer(); });
 $('#zoomOut').addEventListener('click', () => zoom(0.8));
 $('#scanClose').addEventListener('click', () => { stopScanner(); history.back(); });
 $('#torchBtn').addEventListener('click', toggleTorch);
@@ -990,12 +1092,14 @@ async function boot() {
   S.pin = await setting('pin', null);
   S.restrictAdmin = await setting('restrictAdmin', true);
   S.lockApp = await setting('lockApp', false);
+  S.user = await setting('deviceUser', '');
   await refresh();
   if (S.pin && S.lockApp) {
     main().innerHTML = '<div class="empty"><p><b>App bloqueada</b></p></div>';
     let ok = null; while (ok !== true) { ok = await askPin('Ingresa tu PIN', 'La app está protegida con PIN.'); }
     S.admin = true;
   }
+  if (!S.user) await askUser(true);
   route();
   window.__appReady = true;
   if ('serviceWorker' in navigator) {
